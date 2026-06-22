@@ -16,7 +16,7 @@ A lightweight Flask web app built with **Python** that lets you chat with **Gemi
 
 ├── index.html      # Frontend UI (served by Flask)
 
-├── .env            # Your API key (do NOT commit this)
+├── .env            # Your API key 
 
 ├── requirements.txt
 
@@ -58,6 +58,3 @@ http://localhost:5000
 - Python 3.9+
 - A valid [Gemini API key](https://aistudio.google.com/app/apikey)
 
-## .gitignore Tip
-
-Make sure your `.env` is ignored before pushing:
