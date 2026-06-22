@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multimodal Voice & Text Chatbot</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Roboto, sans-serif; }
+        body { display: flex; height: 100vh; background-color: #f7fafc; color: #2d3748; overflow: hidden; }
+        
+        /* Left Sidebar UI layout */
+        .sidebar { width: 380px; background-color: #ffffff; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; padding: 20px; box-shadow: 4px 0 10px rgba(0,0,0,0.02); }
+        .sidebar h2 { font-size: 1.25rem; margin-bottom: 15px; color: #4a5568; border-bottom: 2px solid #edf2f7; padding-bottom: 10px; }
+        .chat-history { flex: 1; overflow-y: auto; margin-bottom: 15px; padding-right: 5px; display: flex; flex-direction: column; gap: 12px; }
+        .message { padding: 12px; border-radius: 8px; font-size: 0.95rem; max-width: 85%; line-height: 1.4; word-wrap: break-word; }
+        .user-msg { background-color: #edf2f7; align-self: flex-end; color: #2d3748; }
+        .ai-msg { background-color: #ebf8ff; color: #2b6cb0; align-self: flex-start; }
+        .input-group { display: flex; gap: 8px; }
+        .input-group input { flex: 1; padding: 12px; border: 1px solid #cbd5e0; border-radius: 6px; outline: none; transition: border 0.2s; }
+        .input-group input:focus { border-color: #4299e1; }
+        .input-group button { padding: 12px 18px; background-color: #4299e1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .input-group button:hover { background-color: #3182ce; }
+
+        /* Main Screen Audio Hub Layout */
+        .main-content { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle, #ffffff 0%, #f7fafc 100%); }
+        .voice-card { text-align: center; background: #ffffff; padding: 50px 40px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; width: 400px; }
+        .mic-btn { width: 110px; height: 110px; border-radius: 50%; border: none; background-color: #e53e3e; color: white; font-size: 2.5rem; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 6px 20px rgba(229, 62, 62, 0.35); transition: all 0.25s ease; outline: none; }
+        .mic-btn:hover { transform: scale(1.04); background-color: #c53030; }
+        .mic-btn.recording { background-color: #38a169; box-shadow: 0 0 25px rgba(56, 161, 105, 0.6); animation: pulse 1.6s infinite; }
+        .status-text { margin-top: 25px; font-size: 1.1rem; font-weight: 600; color: #4a5568; min-height: 27px; }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.06); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>Text Chat</h2>
+        <div class="chat-history" id="chatHistory"></div>
+        <div class="input-group">
+            <input type="text" id="textInput" placeholder="Type your message here...">
+            <button id="sendBtn">Send</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="voice-card">
+            <button class="mic-btn" id="micBtn">🎙️</button>
+            <div class="status-text" id="statusText">Click the microphone to speak</div>
+        </div>
+    </div>
+
+    <script>
+        const chatHistory = document.getElementById('chatHistory');
+        const textInput = document.getElementById('textInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const micBtn = document.getElementById('micBtn');
+        const statusText = document.getElementById('statusText');
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        function appendMessage(sender, text) {
+            const msgDiv = document.createElement('div');
+            msgDiv.classList.add('message', sender === 'user' ? 'user-msg' : 'ai-msg');
+            msgDiv.innerText = text;
+            chatHistory.appendChild(msgDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        // Low-latency Native Text-to-Speech Engine (Locked to American Accent)
+function runTextToSpeech(text) {
+    window.speechSynthesis.cancel(); // Abort active speech instantly
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Get all available voices installed on your system/browser
+    const systemVoices = window.speechSynthesis.getVoices();
+    
+    // 1. Try to find a high-quality Google or Natural American English voice
+    let selectedVoice = systemVoices.find(voice => 
+        voice.lang === 'en-US' && (voice.name.includes('Google') || voice.name.includes('Natural'))
+    );
+    
+    // 2. Fallback: If no premium voice is found, grab any standard American English voice
+    if (!selectedVoice) {
+        selectedVoice = systemVoices.find(voice => voice.lang === 'en-US');
+    }
+    
+    // 3. Last Resort: Grab any English voice (British, Australian, etc.) if US isn't installed
+    if (!selectedVoice) {
+        selectedVoice = systemVoices.find(voice => voice.lang.startsWith('en-'));
+    }
+    
+    // Apply the selected voice to the utterance
+    if (selectedVoice) {
+        utterance.voice = selectedVoice;
+    }
+
+    window.speechSynthesis.speak(utterance);
+}
+        // Text Pipelines
+        async function executeTextDelivery() {
+            const currentMessage = textInput.value.trim();
+            if (!currentMessage) return;
+
+            appendMessage('user', currentMessage);
+            textInput.value = '';
+            statusText.innerText = "Thinking...";
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: currentMessage })
+                });
+                const payload = await response.json();
+                if (payload.response) {
+                    appendMessage('ai', payload.response);
+                    runTextToSpeech(payload.response);
+                    statusText.innerText = "Click the microphone to speak";
+                } else {
+                    statusText.innerText = "Error fetching response.";
+                }
+            } catch (err) {
+                console.error(err);
+                statusText.innerText = "Server communication failure.";
+            }
+        }
+
+        sendBtn.addEventListener('click', executeTextDelivery);
+        textInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') executeTextDelivery(); });
+
+        // Voice/Audio Stream Capturing Engine
+        micBtn.addEventListener('click', async () => {
+            if (!isRecording) {
+                audioChunks = [];
+                try {
+                    const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm' });
+                    
+                    mediaRecorder.ondataavailable = (event) => { audioChunks.push(event.data); };
+                    mediaRecorder.onstop = async () => {
+                        statusText.innerText = "Processing voice query...";
+                        const consolidatedBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        
+                        const packagePayload = new FormData();
+                        packagePayload.append('audio', consolidatedBlob, 'input.webm');
+
+                        try {
+                            const callbackResult = await fetch('/voice', {
+                                method: 'POST',
+                                body: packagePayload
+                            });
+                            const data = await callbackResult.json();
+                            if (data.response) {
+                                appendMessage('ai', data.response);
+                                runTextToSpeech(data.response);
+                                statusText.innerText = "Click the microphone to speak";
+                            } else {
+                                statusText.innerText = "Voice processing error.";
+                            }
+                        } catch (err) {
+                            console.error(err);
+                            statusText.innerText = "Server connection lost.";
+                        }
+                    };
+
+                    mediaRecorder.start();
+                    isRecording = true;
+                    micBtn.classList.add('recording');
+                    statusText.innerText = "Listening... Click mic again to stop.";
+                } catch (micErr) {
+                    console.error("Microphone device unreachable:", micErr);
+                    statusText.innerText = "Microphone hardware access denied.";
+                }
+            } else {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop()); // Turn off hardware recording indicator
+                isRecording = false;
+                micBtn.classList.remove('recording');
+            }
+        });
+
+        // Initialize voice cache triggers on browsers requiring explicit callback bindings
+        window.speechSynthesis.onvoiceschanged = () => {};
+    </script>
+</body>
+</html>
